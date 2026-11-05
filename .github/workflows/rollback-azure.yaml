@@ -1,0 +1,77 @@
+name: Rollback API on Azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_image_tag:
+        description: "Existing API image tag (40-character Git commit SHA)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  rollback:
+    name: Deploy previously published API image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate image tag
+        env:
+          API_IMAGE_TAG: ${{ inputs.api_image_tag }}
+        run: |
+          if [[ ! "$API_IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Error: Image tag must be a 40-character lowercase Git SHA."
+            exit 1
+          fi
+
+      - name: Checkout deployment repository
+        uses: actions/checkout@v4
+        with:
+          repository: JacobusTheOne/album-app-deployment
+          token: ${{ secrets.DEPLOY_REPO_TOKEN }}
+          path: deployment
+
+      - name: Login to Azure using deployment identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_DEPLOY_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify image exists in ACR
+        env:
+          API_IMAGE_TAG: ${{ inputs.api_image_tag }}
+        run: |
+          az acr repository show \
+            --name ca7e04894508acr \
+            --image "album-api:$API_IMAGE_TAG" \
+            --output table
+
+      - name: Deploy previous image with Bicep
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          API_IMAGE_TAG: ${{ inputs.api_image_tag }}
+        run: |
+          az deployment group create \
+            --resource-group rg-azure-container-apps-dev \
+            --template-file deployment/infra/api.bicep \
+            --parameters apiImageTag="$API_IMAGE_TAG" \
+                         databaseUrl="$DATABASE_URL"
+
+      - name: Install Container Apps CLI extension
+        run: az extension add --name containerapp --upgrade
+
+      - name: Verify rollback deployment
+        env:
+          API_IMAGE_TAG: ${{ inputs.api_image_tag }}
+        run: |
+          az containerapp show \
+            --name album-api \
+            --resource-group rg-azure-container-apps-dev \
+            --query "{image:properties.template.containers[0].image,latestRevision:properties.latestRevisionName}" \
+            --output table
+
+          echo "Expected image tag: $API_IMAGE_TAG"
