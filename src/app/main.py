@@ -1,5 +1,6 @@
 import os
 
+from app.key_vault import get_secret
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
@@ -63,6 +64,22 @@ def ready(db: Session = Depends(get_db)):
 
     return {"status": "ready"}
 
+@app.get("/test-key-vault")
+def test_key_vault():
+    try:
+        secret = get_secret("AlbumApp-TestMessage")
+
+        return {
+            "status": "success",
+            "secret_retrieved": secret is not None,
+            "secret_length": len(secret)
+        }
+
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to retrieve secret from Key Vault"
+        )
 
 @app.get("/albums", response_model=list[AlbumResponse])
 def get_albums(db: Session = Depends(get_db)):
